@@ -1,0 +1,39 @@
+# 加载必要的包
+library(CalibrationCurves)
+library(ggplot2)
+
+# 创建校准曲线
+cal_plot <- val.prob.ci.2(
+  p = pred_prob, 
+  y = as.numeric(test_data$death_28day) - 1,
+  smooth = "loess",  # 使用局部回归平滑
+  logistic.cal = TRUE,  # 添加逻辑校准线
+  xlab = "预测死亡概率",
+  ylab = "实际死亡比例",
+  main = "ECMO患者28天死亡风险校准曲线",
+  cex = 1.2,
+  cex.axis = 1.1,
+  cex.lab = 1.2,
+  col.ideal = "red",  # 理想线颜色
+  lwd.ideal = 2,      # 理想线粗细
+  col.smooth = "blue" # 平滑线颜色
+)
+
+# 添加图例和注释
+legend(0.6, 0.3, 
+       c("理想校准", "观测值", "平滑曲线", "逻辑校准"),
+       lty = c(2, 0, 1, 1), 
+       pch = c(NA, 21, NA, NA),
+       lwd = c(2, NA, 2, 2),
+       col = c("red", "black", "blue", "green"),
+       bty = "n")
+
+# 添加性能指标文本
+text(0.2, 0.8, 
+     sprintf("Brier = %.3f\nAUC = %.3f\n校准斜率 = %.2f", 
+             0.174, 0.852, 2.473),
+     cex = 1.1)
+
+# 保存为高分辨率图片
+dev.copy(png, "Calibration_Curve.png", width = 8, height = 6, units = "in", res = 300)
+dev.off()
