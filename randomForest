@@ -1,0 +1,100 @@
+# 1. 内置特征重要性分析（最可靠方法）
+rf_model <- randomForest(
+  death_28day ~ .,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE  # 确保计算重要性
+)
+
+# 提取特征重要性
+importance_data <- importance(rf_model, type = 1, scale = TRUE)  # 使用MeanDecreaseAccuracy
+importance_df <- data.frame(
+  Feature = rownames(importance_data),
+  Importance = importance_data[, "MeanDecreaseAccuracy"]
+) %>%
+  arrange(desc(Importance)) %>%
+  mutate(Feature = factor(Feature, levels = Feature))
+
+# 创建专业特征重要性图
+library(ggplot2)
+ggplot(importance_df, aes(x = Importance, y = reorder(Feature, Importance))) +
+  geom_col(fill = "#1E88E5", alpha = 0.8) +
+  labs(title = "Feature Importance for Mortality Prediction (Random Forest)",
+       x = "Importance (Mean Decrease Accuracy)",
+       y = "") +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_text(face = "bold", size = 10),
+    plot.title = element_text(face = "bold", size = 14)
+  )
+
+# 保存为高分辨率图片
+ggsave("RandomForest_Feature_Importance.png", width = 10, height = 6, dpi = 300)
+
+# 2. 部分依赖图（Partial Dependence Plots）
+library(pdp)
+
+# 创建关键变量的PDP图
+create_pdp_plot <- function(feature) {
+  pdp_data <- partial(
+    rf_model,
+    pred.var = feature,
+    train = train_data,
+    type = "classification",
+    prob = TRUE
+  )
+  
+  ggplot(pdp_data, aes_string(x = feature, y = "yhat")) +
+    geom_line(color = "#D81B60", size = 1.5) +
+    geom_rug(data = train_data, aes_string(x = feature), sides = "b", alpha = 0.1) +
+    labs(title = paste("Partial Dependence on", feature),
+         x = feature,
+         y = "Predicted Mortality Probability") +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+}
+
+# 生成并保存关键变量的PDP图
+key_features <- c("Apache_II", "Lactate", "age", "VA")
+for (feature in key_features) {
+  p <- create_pdp_plot(feature)
+  ggsave(paste0("PDP_", feature, ".png"), plot = p, width = 8, height = 6, dpi = 300)
+}
+
+# 3. 变量交互作用分析
+interact_data <- vint(rf_model, feature_names = key_features, train = train_data)
+
+# 创建交互作用图
+ggplot(interact_data, aes(x = reorder(Variables, Interaction), y = Interaction)) +
+  geom_col(fill = "#FFC107", alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Feature Interaction Strength",
+       x = "Feature Pair",
+       y = "Interaction Strength (H-statistic)") +
+  theme_minimal()
+
+# 保存图片
+ggsave("Feature_Interactions.png", width = 10, height = 6, dpi = 300)
+
+# 4. 个体条件期望图（ICE Plots）
+# 以乳酸为例
+ice_data <- partial(
+  rf_model,
+  pred.var = "Lactate",
+  train = train_data,
+  type = "classification",
+  prob = TRUE,
+  ice = TRUE
+)
+
+ggplot(ice_data, aes(x = Lactate, y = yhat, group = yhat.id)) +
+  geom_line(alpha = 0.2, color = "#004D40") +
+  stat_summary(fun = mean, geom = "line", color = "#D81B60", size = 1.5) +
+  labs(title = "Individual Conditional Expectation for Lactate",
+       x = "Lactate Level",
+       y = "Predicted Mortality Probability") +
+  theme_minimal()
+
+# 保存图片
+ggsave("ICE_Lactate.png", width = 8, height = 6, dpi = 300)
