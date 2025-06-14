@@ -1,0 +1,172 @@
+# 加载必要的包
+library(tidyverse)
+library(caret)
+library(pROC)
+library(rpart)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(patchwork)
+
+# 检查数据结构
+str(core_data)
+
+# 划分训练集和测试集 (70%训练, 30%测试)
+set.seed(123)  # 确保可重复性
+train_index <- createDataPartition(core_data$death_28day, p = 0.7, list = FALSE)
+train_data <- core_data[train_index, ]
+test_data <- core_data[-train_index, ]
+
+# 创建空列表存储模型和结果
+models <- list()
+results <- list()
+roc_curves <- list()
+
+# 1. 逻辑回归模型（直接使用glm）
+set.seed(123)
+models$logistic <- glm(
+  death_28day ~ .,
+  data = train_data,
+  family = "binomial"
+)
+
+# 2. 决策树模型（使用rpart直接建模）
+set.seed(123)
+models$tree <- rpart(
+  death_28day ~ .,
+  data = train_data,
+  method = "class",
+  control = rpart.control(cp = 0.01, xval = 5)
+)
+
+# 3. 随机森林模型
+set.seed(123)
+models$rf <- randomForest(
+  death_28day ~ .,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE
+)
+
+# 4. SVM模型
+set.seed(123)
+models$svm <- svm(
+  death_28day ~ .,
+  data = train_data,
+  probability = TRUE,
+  kernel = "radial"
+)
+
+# 5. XGBoost模型 - 需要数据转换
+set.seed(123)
+
+# 准备矩阵数据
+train_matrix <- model.matrix(death_28day ~ . - 1, data = train_data)
+test_matrix <- model.matrix(death_28day ~ . - 1, data = test_data)
+
+dtrain <- xgb.DMatrix(
+  data = train_matrix,
+  label = as.numeric(train_data$death_28day) - 1
+)
+
+dtest <- xgb.DMatrix(
+  data = test_matrix,
+  label = as.numeric(test_data$death_28day) - 1
+)
+
+# 训练模型
+models$xgb <- xgb.train(
+  data = dtrain,
+  objective = "binary:logistic",
+  nrounds = 100,
+  max_depth = 3,
+  eta = 0.3,
+  verbose = 0
+)
+
+# 在测试集上评估所有模型
+model_names <- c("Logistic Regression", "Decision Tree", "Random Forest", "SVM", "XGBoost")
+
+for (i in seq_along(models)) {
+  model_name <- model_names[i]
+  model <- models[[i]]
+  
+  # 根据不同模型类型进行预测
+  if (model_name == "Logistic Regression") {
+    pred_prob <- predict(model, newdata = test_data, type = "response")
+  } else if (model_name == "Decision Tree") {
+    pred_prob <- predict(model, newdata = test_data, type = "prob")[, "Died"]
+  } else if (model_name == "Random Forest") {
+    pred_prob <- predict(model, newdata = test_data, type = "prob")[, "Died"]
+  } else if (model_name == "SVM") {
+    pred_prob <- attr(predict(model, newdata = test_data, probability = TRUE), "probabilities")[, "Died"]
+  } else if (model_name == "XGBoost") {
+    pred_prob <- predict(model, newdata = dtest)
+  }
+  
+  # 计算ROC曲线
+  roc_obj <- roc(test_data$death_28day, pred_prob, levels = c("Survived", "Died"))
+  roc_curves[[model_name]] <- roc_obj
+  
+  # 计算混淆矩阵
+  pred_class <- ifelse(pred_prob > 0.5, "Died", "Survived")
+  pred_class <- factor(pred_class, levels = c("Survived", "Died"))
+  
+  cm <- confusionMatrix(pred_class, test_data$death_28day, positive = "Died")
+  
+  # 计算AUC置信区间
+  auc_ci <- ci.auc(roc_obj)
+  
+  # 存储结果
+  results[[model_name]] <- list(
+    AUC = as.numeric(auc(roc_obj)),
+    AUC_CI = auc_ci,
+    Sensitivity = cm$byClass["Sensitivity"],
+    Specificity = cm$byClass["Specificity"],
+    ConfusionMatrix = cm$table,
+    ROC = roc_obj
+  )
+}
+
+# 打印各模型性能指标
+performance_df <- map_dfr(results, ~{
+  data.frame(
+    AUC = .x$AUC,
+    AUC_CI_Lower = .x$AUC_CI[1],
+    AUC_CI_Upper = .x$AUC_CI[3],
+    Sensitivity = .x$Sensitivity,
+    Specificity = .x$Specificity
+  )
+}, .id = "Model")
+
+print(performance_df)
+
+# 绘制综合ROC曲线
+ggroc <- ggroc(roc_curves, legacy.axes = TRUE) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+  labs(title = "Comparison of ROC Curves",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "True Positive Rate (Sensitivity)",
+       color = "Model") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  theme(legend.position = c(0.8, 0.2))
+
+print(ggroc)
+
+# 绘制重要变量图（以随机森林为例）
+var_imp <- importance(models$rf)
+var_imp_df <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, "MeanDecreaseAccuracy"]
+) %>%
+  arrange(desc(Importance)) %>%
+  head(10)
+
+ggplot(var_imp_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 10 Important Variables (Random Forest)",
+       x = "",
+       y = "Importance") +
+  theme_minimal()
