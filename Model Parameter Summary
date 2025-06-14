@@ -1,0 +1,62 @@
+# 修正后的性能汇总表格代码
+performance_table <- map_dfr(names(results), function(model_name) {
+  model_results <- results[[model_name]]
+  
+  # 计算敏感度和特异度的95%置信区间
+  sens_ci <- binom.test(
+    x = model_results$ConfusionMatrix[2, 2],  # TP
+    n = sum(model_results$ConfusionMatrix[, 2]), # TP + FN
+    conf.level = 0.95
+  )$conf.int
+  
+  spec_ci <- binom.test(
+    x = model_results$ConfusionMatrix[1, 1],  # TN
+    n = sum(model_results$ConfusionMatrix[, 1]), # TN + FP
+    conf.level = 0.95
+  )$conf.int
+  
+  # 计算准确率和F1分数
+  accuracy <- sum(diag(model_results$ConfusionMatrix)) / sum(model_results$ConfusionMatrix)
+  f1 <- 2 * model_results$ConfusionMatrix[2, 2] / 
+        (2 * model_results$ConfusionMatrix[2, 2] + 
+         model_results$ConfusionMatrix[1, 2] + 
+         model_results$ConfusionMatrix[2, 1])
+  
+  data.frame(
+    Model = model_name,
+    AUC = sprintf("%.3f (%.3f-%.3f)", 
+                  model_results$AUC, 
+                  model_results$AUC_CI[1], 
+                  model_results$AUC_CI[3]),
+    Sensitivity = sprintf("%.3f (%.3f-%.3f)", 
+                         model_results$Sensitivity, 
+                         sens_ci[1], 
+                         sens_ci[2]),
+    Specificity = sprintf("%.3f (%.3f-%.3f)", 
+                         model_results$Specificity, 
+                         spec_ci[1], 
+                         spec_ci[2]),
+    Accuracy = sprintf("%.3f", accuracy),
+    F1_Score = sprintf("%.3f", f1)
+  )
+}) %>%
+  mutate(Model = factor(Model, levels = c("Logistic Regression", "Decision Tree", 
+                                         "Random Forest", "SVM", "XGBoost"))) %>%
+  arrange(Model)
+
+# 打印美观的表格
+library(kableExtra)
+performance_table %>%
+  kable(
+    col.names = c("Model", "AUC (95% CI)", "Sensitivity (95% CI)", 
+                  "Specificity (95% CI)", "Accuracy", "F1 Score"),
+    align = c("l", "c", "c", "c", "c", "c"),
+    caption = "Performance Comparison of Predictive Models for 28-Day Mortality"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    font_size = 14,
+    position = "center"
+  ) %>%
+  row_spec(which.max(as.numeric(gsub(" .*", "", performance_table$AUC))), bold = TRUE, color = "white", background = "#1E88E5")
